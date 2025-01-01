@@ -85,6 +85,28 @@ def test_llm_response(lm: dspy.OllamaLocal, timeout: int = 30) -> bool:
         logger.error(f"Error testing LLM: {str(e)}")
         return False
 
+def test_prompts(lm: dspy.OllamaLocal) -> None:
+    """Test prompt improvement with multiple predefined prompts
+    
+    Args:
+        lm: Configured language model
+    """
+    test_prompts = [
+        "Why is the sky blue?",
+        "Can you tell me about Zeus?",
+        "I need help planning a trip to Hawaii",
+        "I don't know how to bake a cake",
+        "Write a blog post about AI"
+    ]
+    
+    for prompt in test_prompts:
+        try:
+            logger.info(f"\nTesting prompt improvement for: {prompt}")
+            improved_prompt = improve_prompt_iteratively(lm, prompt)
+            logger.info(f"Final improved prompt: {improved_prompt}")
+        except Exception as e:
+            logger.error(f"Error improving prompt '{prompt}': {str(e)}")
+
 def improve_prompt_iteratively(
     lm: dspy.OllamaLocal,
     initial_prompt: str,
@@ -151,6 +173,4 @@ if __name__ == "__main__":
     lm = configure_dspy()
     if lm:
         test_llm_response(lm)
-        # Example usage of the new method
-        improved = improve_prompt_iteratively(lm, "Write a blog post about AI")
-        logger.info(f"Final result: {improved}")
+        test_prompts(lm)
