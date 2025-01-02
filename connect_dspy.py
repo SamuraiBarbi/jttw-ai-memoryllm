@@ -1,7 +1,23 @@
 import dspy
-from typing import Optional, Union
+from typing import Optional, Union, List, Dict, Any
 import time
 import logging
+import numpy as np
+from dataclasses import dataclass
+
+@dataclass
+class PromptExample:
+    """Dataclass for storing prompt optimization examples"""
+    input_text: str
+    expected_output: str
+    metadata: Dict[Any, Any] = None
+
+class PromptSignature(dspy.Signature):
+    """Defines the input/output structure for prompt optimization"""
+    original_prompt = dspy.InputField(desc="Original prompt to be improved")
+    context = dspy.InputField(desc="Additional context or constraints")
+    improved_prompt = dspy.OutputField(desc="Optimized version of the prompt")
+    reasoning = dspy.OutputField(desc="Explanation of improvements made")
 
 # Configure logging
 logging.basicConfig(
@@ -25,8 +41,8 @@ def configure_dspy(
     base_url: str = 'http://localhost:11434',
     max_retries: int = 3,
     retry_delay: int = 2
-) -> Optional[dspy.OllamaLocal]:
-    """Configure DSPy to use Ollama local server
+) -> Optional[dspy.LM]:
+    """Configure DSPy to use the language model
     
     Args:
         model: The model to use
@@ -35,16 +51,16 @@ def configure_dspy(
         retry_delay: Delay between retries in seconds
         
     Returns:
-        Configured OllamaLocal instance or None if failed
+        Configured LM instance or None if failed
     """
     if not validate_configuration(model, base_url):
         return None
         
     for attempt in range(max_retries):
         try:
-            # Set up Ollama local connection
-            lm = dspy.OllamaLocal(
-                model=model,
+            # Set up language model connection
+            lm = dspy.LM(
+                model=f'ollama/{model}',
                 base_url=base_url
             )
         
@@ -64,7 +80,7 @@ def configure_dspy(
             logger.error(f"Failed to configure DSPy after {max_retries} attempts")
             return None
 
-def test_llm_response(lm: dspy.OllamaLocal, timeout: int = 30) -> bool:
+def test_llm_response(lm: dspy.LM, timeout: int = 30) -> bool:
     """Test the LLM connection by asking a question"""
     try:
         logger.info("Testing LLM connection...")
@@ -85,7 +101,7 @@ def test_llm_response(lm: dspy.OllamaLocal, timeout: int = 30) -> bool:
         logger.error(f"Error testing LLM: {str(e)}")
         return False
 
-def test_prompts(lm: dspy.OllamaLocal) -> None:
+def test_prompts(lm: dspy.LM) -> None:
     """Test prompt improvement with multiple predefined prompts
     
     Args:
@@ -107,67 +123,196 @@ def test_prompts(lm: dspy.OllamaLocal) -> None:
         except Exception as e:
             logger.error(f"Error improving prompt '{prompt}': {str(e)}")
 
+class PromptOptimizer(dspy.Module):
+    def __init__(self, model_name: str = "llama3.2:3b"):
+        super().__init__()
+        self.improve_prompt = dspy.ChainOfThought(PromptSignature)
+        self.model_name = model_name
+        self.history = []
+        
+    def forward(self, prompt: str, context: str = "") -> dict:
+        """Optimize a prompt using Chain of Thought reasoning
+        
+        Args:
+            prompt: The prompt to optimize
+            context: Additional context or constraints
+            
+        Returns:
+            Dictionary containing improved prompt and reasoning
+        """
+        try:
+            prediction = self.improve_prompt(
+                original_prompt=prompt,
+                context=context
+            )
+            result = {
+                "improved_prompt": prediction.improved_prompt,
+                "reasoning": prediction.reasoning
+            }
+            self.history.append({
+                "original_prompt": prompt,
+                "result": result
+            })
+            return result
+        except Exception as e:
+            logger.error(f"Prompt optimization failed: {str(e)}")
+            return {
+                "improved_prompt": prompt,
+                "reasoning": "Optimization failed"
+            }
+
 def improve_prompt_iteratively(
-    lm: dspy.OllamaLocal,
+    lm: dspy.LM,
     initial_prompt: str,
-    iterations: int = 3,
+    examples: List[PromptExample] = None,
+    max_iterations: int = 5,
+    min_score_improvement: float = 0.5,
     timeout: int = 30
 ) -> str:
-    """Iteratively improve a prompt using DSPy's optimization capabilities.
+    """Iteratively improve a prompt using Bayesian optimization.
     
     Args:
         lm: Configured language model
         initial_prompt: The starting prompt to improve
-        iterations: Number of improvement iterations
+        examples: List of PromptExample instances for evaluation
+        max_iterations: Maximum number of improvement iterations
+        min_score_improvement: Minimum score improvement required to continue iterations
+        timeout: Timeout for each LLM request
         
     Returns:
         The best improved version of the prompt
     """
+    base_optimizer = PromptOptimizer()
+    bayesian_optimizer = BayesianPromptOptimizer(base_optimizer)
+    
+    # Create default examples if none provided
+    if examples is None:
+        examples = [
+            PromptExample(
+                input_text=initial_prompt,
+                expected_output="",  # Placeholder, should be filled with expected outputs
+                metadata={"context": "general"}
+            )
+        ]
+    
     try:
         logger.info(f"Improving prompt: {initial_prompt}")
-        current_prompt = initial_prompt
+        best_prompt = bayesian_optimizer.optimize(
+            initial_prompt=initial_prompt,
+            examples=examples,
+            n_iterations=max_iterations
+        )
         
-        for i in range(iterations):
-            logger.info(f"Iteration {i+1}/{iterations}")
-            
-            # Generate improved version using DSPy with timeout
-            try:
-                start_time = time.time()
-                improved_prompt = lm(f"Improve this prompt: {current_prompt}")
-                elapsed_time = time.time() - start_time
-                logger.info(f"Improved version received in {elapsed_time:.2f}s: {improved_prompt}")
-            except Exception as e:
-                logger.error(f"Prompt improvement failed: {str(e)}")
-                continue
-            
-            # Evaluate and keep the better version
-            current_score = lm(f"Rate this prompt (1-10) with just a number: {current_prompt}")
-            improved_score = lm(f"Rate this prompt (1-10) with just a number: {improved_prompt}")
-            
-            # Handle list responses and extract numeric score
-            def extract_score(response):
-                if isinstance(response, list):
-                    response = response[0]
-                # Extract first number from response
-                import re
-                match = re.search(r'\d+', response)
-                return float(match.group()) if match else 0
-            
-            current_score = extract_score(current_score)
-            improved_score = extract_score(improved_score)
-            
-            if improved_score > current_score:
-                logger.info(f"New version is better (score: {improved_score} > {current_score})")
-                current_prompt = improved_prompt
-            else:
-                logger.info(f"Keeping previous version (score: {current_score} >= {improved_score})")
+        # Evaluate final prompt
+        best_score = evaluate_prompt(lm, best_prompt)
+        logger.info(f"Final improved prompt (score: {best_score:.2f}): {best_prompt}")
         
-        logger.info(f"Final improved prompt: {current_prompt}")
-        return current_prompt
+        return best_prompt
         
     except Exception as e:
         logger.error(f"Error improving prompt: {str(e)}")
         return initial_prompt
+
+class BayesianPromptOptimizer:
+    def __init__(self, base_optimizer: PromptOptimizer):
+        self.base_optimizer = base_optimizer
+        self.optimization_history = []
+        
+    def quality_metric(self, prediction: str, gold: str) -> float:
+        """Compute quality score between 0 and 1"""
+        # Implement your quality metric here
+        return np.random.random()  # Placeholder
+    
+    def generate_candidates(self, prompt: str, n_candidates: int = 5) -> List[str]:
+        """Generate candidate prompts using base optimizer"""
+        candidates = []
+        for _ in range(n_candidates):
+            result = self.base_optimizer.forward(prompt)
+            candidates.append(result["improved_prompt"])
+        return candidates
+    
+    def optimize(self, 
+                initial_prompt: str,
+                examples: List[PromptExample],
+                n_iterations: int = 10,
+                n_candidates: int = 5) -> str:
+        current_best = initial_prompt
+        best_score = 0
+        
+        for iteration in range(n_iterations):
+            # Generate candidates
+            candidates = self.generate_candidates(current_best, n_candidates)
+            
+            # Evaluate candidates
+            scores = []
+            for candidate in candidates:
+                candidate_scores = []
+                for example in examples:
+                    try:
+                        result = self.base_optimizer.forward(
+                            candidate, 
+                            context=str(example.metadata) if example.metadata else ""
+                        )
+                        score = self.quality_metric(
+                            result["improved_prompt"],
+                            example.expected_output
+                        )
+                        candidate_scores.append(score)
+                    except Exception as e:
+                        candidate_scores.append(0)
+                        
+                avg_score = np.mean(candidate_scores)
+                scores.append(avg_score)
+                
+                if avg_score > best_score:
+                    current_best = candidate
+                    best_score = avg_score
+            
+            self.optimization_history.append({
+                'iteration': iteration,
+                'best_score': best_score,
+                'best_prompt': current_best
+            })
+            
+        return current_best
+
+def evaluate_prompt(lm: dspy.LM, prompt: str) -> float:
+    """Evaluate a prompt using multiple criteria and return a composite score
+    
+    Args:
+        lm: Configured language model
+        prompt: The prompt to evaluate
+        
+    Returns:
+        Composite score between 0 and 10
+    """
+    try:
+        def extract_score(response):
+            if isinstance(response, list):
+                response = response[0]
+            # Extract first number from response
+            import re
+            match = re.search(r'\d+', str(response))
+            return float(match.group()) if match else 0.0
+            
+        # Get scores for different aspects
+        clarity_score = extract_score(lm(f"Rate the clarity of this prompt (1-10): {prompt}"))
+        specificity_score = extract_score(lm(f"Rate the specificity of this prompt (1-10): {prompt}"))
+        engagement_score = extract_score(lm(f"Rate the engagement of this prompt (1-10): {prompt}"))
+        
+        # Calculate weighted composite score
+        composite_score = (
+            clarity_score * 0.4 +
+            specificity_score * 0.4 +
+            engagement_score * 0.2
+        )
+        
+        logger.debug(f"Prompt evaluation scores - Clarity: {clarity_score:.2f}, Specificity: {specificity_score:.2f}, Engagement: {engagement_score:.2f}, Composite: {composite_score:.2f}")
+        return composite_score
+        
+    except Exception as e:
+        logger.error(f"Prompt evaluation failed: {str(e)}")
+        return 0.0
 
 if __name__ == "__main__":
     lm = configure_dspy()
