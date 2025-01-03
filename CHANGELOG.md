@@ -5,6 +5,20 @@ All notable changes to the JTTW-AI MemoryLLM project will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2025-01-02
+
+### Changed
+- Simplified hybrid optimization strategy
+  - Removed planned dynamic switching feature
+  - Committed to efficient sequential MIPRO-COPRO pipeline
+  - Updated project roadmap to reflect changes
+
+### Added
+- Enhanced documentation
+  - Updated Phase 1 completion status
+  - Clarified hybrid optimization approach
+  - Refined remaining tasks list
+
 ## [0.2.0] - 2025-01-02
 
 ### Added
