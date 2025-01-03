@@ -1,23 +1,51 @@
-from models import Prompt
+from prompt_generator import PromptGenerator, EnhancedPrompt
 from mipro import MIPROOptimizer
 from copro import COPROOptimizer
 from hybrid import HybridOptimizer
+import dspy
+from dspy.teleprompt import BootstrapFewShot
+import requests
+
+class OllamaLLM(dspy.LM):
+    def __init__(self, model="llama3.2:3b", url="http://localhost:11434"):
+        super().__init__(model=model)
+        self.url = url
+        self.endpoint = f"{url}/api/generate"
+
+    def basic_request(self, prompt, **kwargs):
+        try:
+            response = requests.post(
+                self.endpoint,
+                json={
+                    "model": self.model,
+                    "prompt": prompt,
+                    "stream": False
+                }
+            )
+            response.raise_for_status()
+            return response.json()["response"]
+        except Exception as e:
+            print(f"Error calling Ollama: {str(e)}")
+            return ""
+
+    def __call__(self, prompt, **kwargs):
+        response = self.basic_request(prompt, **kwargs)
+        return response
 
 def main():
-    # Initial prompt
-    initial_prompt = Prompt(
-        instruction="Explain why the sky appears blue",
-        context="The explanation should cover both the scientific principles and be easy to understand",
-        examples=[
-            "Sunlight contains all colors of the rainbow, but blue light is scattered more by air molecules",
-            "This scattering effect, called Rayleigh scattering, makes the sky look blue to our eyes"
-        ],
-        constraints=[
-            "Use simple, non-technical language",
-            "Include everyday examples or analogies",
-            "Explain the role of sunlight and atmosphere"
-        ]
-    )
+    # Configure DSPy with local Ollama LLM
+    ollama = OllamaLLM(model="llama3.2:3b")
+    dspy.settings.configure(lm=ollama)
+    
+    # Initialize prompt generator
+    prompt_generator = PromptGenerator()
+    
+    # Generate enhanced prompt components from just the instruction
+    instruction = "Explain why the sky appears blue"
+    prompt_components = prompt_generator.forward(instruction)
+    
+    # Create the initial prompt using generated components
+    initial_prompt = EnhancedPrompt(**prompt_components)
     
     print("\nInitial Prompt:")
     print("-" * 50)
