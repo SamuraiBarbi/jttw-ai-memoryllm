@@ -1,0 +1,13 @@
+name: jttw-ai-memoryllm
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+    - dspy-ai
+    - litellm
+    - pydantic
+    - numpy
+    - pandas
